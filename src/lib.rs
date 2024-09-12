@@ -1,16 +1,19 @@
-use std::{sync::{mpsc, Arc, Mutex}, thread};
+use std::{
+    sync::{mpsc, Arc, Mutex},
+    thread,
+};
 
-use log::info;
+use log::{info, warn};
 
 pub struct ThreadPool {
     threads: Vec<Worker>,
-    sender: mpsc::Sender<Job>,
+    sender: Option<mpsc::Sender<Job>>,
 }
 
 impl ThreadPool {
     pub fn new(size: u32) -> Self {
         assert!(size > 0);
-        
+
         let (sender, receiver) = mpsc::channel();
         let rec = Arc::new(Mutex::new(receiver));
         let mut threads = vec![];
@@ -19,20 +22,33 @@ impl ThreadPool {
         }
         Self {
             threads,
-            sender,
+            sender: Some(sender),
         }
     }
 
-    pub fn exec<F>(&self, f: F) 
-    where F: FnOnce() + Send + 'static {
+    pub fn exec<F>(&self, f: F)
+    where
+        F: FnOnce() + Send + 'static,
+    {
         // let (sender, _) = mpsc::channel();
-        self.sender.send(Box::new(f)).unwrap();
+        self.sender.as_ref().unwrap().send(Box::new(f)).unwrap();
+    }
+}
+
+impl Drop for ThreadPool {
+    fn drop(&mut self) {
+        drop(self.sender.take());
+        for worker in &mut self.threads {
+            warn!("to shut down worker {}", worker.id);
+            worker.thread.take().unwrap().join().unwrap();
+            // drop(worker);
+        }
     }
 }
 
 struct Worker {
     id: u32,
-    thread: thread::JoinHandle<()>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 type Job = Box<dyn FnOnce() + Send + 'static>;
 impl Worker {
@@ -40,16 +56,19 @@ impl Worker {
         let thread = thread::spawn(move || loop {
             info!("Worker {} is waiting for a job.", id);
             let lock = receiver.lock();
-            info!("Worker {} getting lock; trying.", id);
             let lock = lock.unwrap();
-            info!("Worker {} got a lock; locking.", id);
-            let job = lock.recv().unwrap();
-            info!("Worker {} got a job; executing.", id);
-            job();
+            let job = lock.recv();
+            if let Ok(job) = job {
+                info!("Worker {} got a job; executing.", id);
+                job();
+            } else {
+                info!("Worker {} is shutting down.", id);
+                break;
+            };
         });
         Self {
             id,
-            thread,
+            thread: Some(thread),
         }
     }
 }
