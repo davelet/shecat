@@ -1,0 +1,15 @@
+appenders:
+  stdout:
+    kind: console
+    encoder:
+      pattern: "{d} {l} {T}:{I} - {m}{n}"
+  file:
+    kind: file
+    path: "log.log"
+    encoder:
+      pattern: "{d} {l} {T}:{I} - {m}{n}"
+root:
+  level: info
+  appenders:
+    - stdout
+    - file
